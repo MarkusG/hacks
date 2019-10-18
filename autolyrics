@@ -1,0 +1,38 @@
+#!/bin/bash
+
+parse() {
+	# congratulations, you played yourself
+	local start="<!-- Usage of azlyrics.com content by any third-party lyrics provider is prohibited by our licensing agreement. Sorry about that. -->"
+
+	sed -n "/$start/,/<\/div>/p" |
+		sed 's/<br>//g' |
+		sed -E 's/<\/?i>//g' | 
+		sed '$ d' |
+		sed '1 d'
+}
+
+get() {
+	stripped_artist=$(echo "$artist" | sed 's/ //g' | tr '[:upper:]' '[:lower:]')
+	stripped_title=$(echo "$title" |
+		sed -E 's/ \(f.*$//g' |
+		sed 's/ //g' |
+		sed "s/'//g" |
+		tr '[:upper:]' '[:lower:]')
+
+	curl -s -H'User-Agent:' "https://www.azlyrics.com/lyrics/$stripped_artist/${stripped_title}.html"
+}
+
+while true; do
+	metadata=$(playerctl -p spotify metadata)
+	artist=$(echo "$metadata" | grep 'xesam:artist' | cut -c 35-)
+	title=$(echo "$metadata" | grep 'xesam:title' | cut -c 35-)
+
+	if [ "$current_artist" != "$artist" ] || [ "$current_title" != "$title" ]; then
+		current_artist="$artist"
+		current_title="$title"
+		clear
+		get | parse
+	fi
+
+	sleep 1
+done

@@ -1,0 +1,81 @@
+#!/bin/bash
+
+WHITE='\033[1;37m'
+GREEN='\033[0;32m'
+NORMAL='\033[0m'
+
+print_color() {
+	printf "${GREEN}==> ${WHITE}%s${NORMAL}\n" "$1"
+}
+
+error_exit() {
+	echo "$(basename "$0"): ${1:-"Unknown error"}" 1>&2
+	exit "$2"
+}
+
+VERSION="$(git tag --points-at)"
+if [[ -z "$VERSION" ]]; then
+	VERSION="$2"
+	[[ -z "$VERSION" ]] && error_exit "No version" 1
+	print_color "Creating tag"
+	git tag -as "$VERSION"
+fi
+
+case $1 in
+	archive)
+		print_color "Creating source archive"
+		mkdir shshare-"$VERSION"
+		cp shshare \
+			uploader.sh \
+			doc/shshare.1 \
+			completions/* \
+			"shshare-${VERSION}"
+		gzip "shshare-${VERSION}/shshare.1"
+		tar -czf "shshare-${VERSION}.tar.gz" "shshare-${VERSION}"
+		rm -r "shshare-${VERSION}"
+		;;
+	github)
+		GITHUB_TOKEN="$(pass github-releaser-token)"
+		print_color "Pushing tag for version ${VERSION}"
+		git push --follow-tags
+		print_color "Publishing GitHub release"
+		payload="{ \"tag_name\": \"$VERSION\", \"name\": \"Version $VERSION\", \"draft\": true }"
+		release_url='https://api.github.com/repos/MarkusGordathian/shshare/releases'
+		create_release_response="$(curl -X POST -H"Authorization: token ${GITHUB_TOKEN}" --data "$payload" "$release_url")"
+		print_color "Uploading source archive"
+		upload_url="$(echo "$create_release_response" | jq -r .upload_url | sed -e "s/{?name,label}/?name=shshare-${VERSION}.tar.gz/")"
+
+		curl -X POST -H'Content-Type: application/gzip' -H"Authorization: token ${GITHUB_TOKEN}" --data "$(cat "shshare-${VERSION}.tar.gz")" "$upload_url"
+		release_url="$(echo "$create_release_response" | jq -r .html_url | sed -e "s/{?name,label}/?name=shshare-${VERSION}.tar.gz/")"
+		print_color "GitHub release created at ${release_url}"
+		firefox "$release_url"
+		;;
+	aur)
+		hash="$(sha512sum "shshare-${VERSION}.tar.gz" | cut -d' ' -f 1)"
+
+		print_color "Updating PKGBUILD"
+		cat aur/PKGBUILD |
+			sed -e "s/pkgver=.*/pkgver=${VERSION}/g" | 
+			sed -e "s/pkgrel=.*/pkgrel=1/g" | 
+			sed -e "s/sha512sums=.*/sha512sums=(\'${hash}\')/g" > PKGBUILD.new
+		mv PKGBUILD.new aur/PKGBUILD
+		vim aur/PKGBUILD
+
+		# push new PKGBUILD
+		print_color "Publishing PKGBUILD"
+		cd aur || exit 1
+		makepkg --printsrcinfo > .SRCINFO
+		git add .SRCINFO PKGBUILD
+		git commit -m "Version ${VERSION}"
+		git push
+		;;
+	clean)
+		rm -r shshare-*
+		;;
+	all)
+		$0 archive "$2"
+		$0 github "$2"
+		$0 aur "$2"
+		;;
+esac
+
